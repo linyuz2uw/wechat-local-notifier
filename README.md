@@ -83,6 +83,7 @@ copy config.example.json config.json
 - `show_sender`：是否尝试显示联系人/群聊名称，默认 `false`。
 - `play_sound`：是否播放系统提示音，默认 `false`。
 - `enable_startup`：运行时自动写入当前 Windows 用户开机启动，默认 `false`。
+- `enable_windows_notification_listener`：优先使用 Windows 官方通知监听 API，默认 `true`。
 - `notification_cooldown_seconds`：冷却时间，避免短时间重复弹窗。
 
 ## 运行
@@ -240,6 +241,8 @@ HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
 不弹窗：
 
 - 确认微信本身有系统通知或窗口状态变化。
+- 如果 Windows 弹出通知访问授权，请允许本工具读取通知；它只读取系统通知元信息，不读取微信数据库。
+- 确认 Windows 设置里微信通知已开启，且专注助手/勿扰模式没有拦截通知。
 - 先运行 `--test-popup`，确认 Tkinter 弹窗能显示。
 - Windows 专注助手、勿扰模式或微信通知设置可能会影响新消息信号。
 - 在安全边界内，如果 Windows 没有向脚本暴露可用信号，程序会保守地不读取微信数据库。

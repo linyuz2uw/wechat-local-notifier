@@ -43,6 +43,7 @@ python --version
 
 Write-Host "==> Installing/updating PyInstaller"
 python -m pip install --upgrade pip pyinstaller
+python -m pip install -r requirements.txt
 
 Write-Host "==> Building windowed exe"
 pyinstaller `

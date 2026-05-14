@@ -16,6 +16,7 @@
   "enable_macos_dock_badge": true,
   "enable_macos_visual_badge": true,
   "enable_macos_dock_visual_badge": true,
+  "enable_windows_notification_listener": true,
   "show_sender": false,
   "play_sound": false,
   "enable_startup": false,

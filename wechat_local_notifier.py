@@ -11,6 +11,7 @@ content.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import ctypes
 import json
 import platform
@@ -47,6 +48,7 @@ class WatchConfig:
     enable_macos_dock_badge: bool = True
     enable_macos_visual_badge: bool = True
     enable_macos_dock_visual_badge: bool = True
+    enable_windows_notification_listener: bool = True
     show_sender: bool = False
     play_sound: bool = False
     enable_startup: bool = False
@@ -83,6 +85,7 @@ class WatchConfig:
             enable_macos_dock_badge=bool(raw.get("enable_macos_dock_badge", True)),
             enable_macos_visual_badge=bool(raw.get("enable_macos_visual_badge", True)),
             enable_macos_dock_visual_badge=bool(raw.get("enable_macos_dock_visual_badge", True)),
+            enable_windows_notification_listener=bool(raw.get("enable_windows_notification_listener", True)),
             show_sender=bool(raw.get("show_sender", False)),
             play_sound=bool(raw.get("play_sound", False)),
             enable_startup=bool(raw.get("enable_startup", False)),
@@ -139,6 +142,20 @@ class DockVisualBadgeInfo:
     @property
     def active(self) -> bool:
         return self.light_pixels > 0
+
+
+@dataclass(frozen=True)
+class WindowsToastInfo:
+    key: str
+    app_name: str
+    texts: tuple[str, ...]
+
+    @property
+    def source(self) -> str:
+        for text in self.texts:
+            if likely_sender_name(text):
+                return text
+        return self.app_name or "微信"
 
 
 @dataclass(frozen=True)
@@ -217,6 +234,69 @@ def likely_sender_name(text: str) -> bool:
 def likely_wechat_notification_text(text: str) -> bool:
     value = normalize_title(text)
     return "微信" in value or "WeChat" in value
+
+
+def safe_getattr(obj, *names: str):
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    return None
+
+
+async def get_windows_wechat_toasts_async(config: WatchConfig) -> list[WindowsToastInfo]:
+    if platform.system() != "Windows" or not config.enable_windows_notification_listener:
+        return []
+    if has_whitelist(config):
+        return []
+
+    try:
+        from winsdk.windows.ui.notifications import KnownNotificationBindings, NotificationKinds
+        from winsdk.windows.ui.notifications.management import (
+            UserNotificationListener,
+            UserNotificationListenerAccessStatus,
+        )
+    except ImportError as exc:
+        raise RuntimeError("winsdk is required for Windows notification listening") from exc
+
+    listener = UserNotificationListener.get_current()
+    status = await listener.request_access_async()
+    if status != UserNotificationListenerAccessStatus.ALLOWED:
+        raise RuntimeError(f"Windows notification access is not allowed: {status}")
+
+    notifications = await listener.get_notifications_async(NotificationKinds.TOAST)
+    generic_binding = KnownNotificationBindings.get_toast_generic()
+    toasts: list[WindowsToastInfo] = []
+    for item in notifications:
+        app_info = safe_getattr(item, "app_info")
+        display_info = safe_getattr(app_info, "display_info") if app_info else None
+        app_name = normalize_title(str(safe_getattr(display_info, "display_name") or ""))
+        app_id = normalize_title(str(safe_getattr(app_info, "app_user_model_id") or ""))
+        app_text = f"{app_name} {app_id}"
+        if not any(keyword in app_text for keyword in config.app_title_keywords):
+            continue
+
+        notification = safe_getattr(item, "notification")
+        visual = safe_getattr(notification, "visual") if notification else None
+        binding = safe_getattr(visual, "get_binding", "GetBinding")
+        binding = binding(generic_binding) if callable(binding) else None
+        text_elements = safe_getattr(binding, "get_text_elements", "GetTextElements") if binding else []
+        text_elements = text_elements() if callable(text_elements) else text_elements
+        texts = tuple(
+            normalize_title(str(safe_getattr(element, "text") or ""))
+            for element in (text_elements or [])
+        )
+        texts = tuple(text for text in texts if text)
+        notification_id = safe_getattr(item, "id")
+        creation_time = safe_getattr(item, "creation_time")
+        key = f"{app_id or app_name}:{notification_id}:{creation_time}:{'|'.join(texts)}"
+        toasts.append(WindowsToastInfo(key=key, app_name=app_name or "微信", texts=texts))
+    return toasts
+
+
+def get_windows_wechat_toasts(config: WatchConfig) -> list[WindowsToastInfo]:
+    if platform.system() != "Windows" or not config.enable_windows_notification_listener:
+        return []
+    return asyncio.run(get_windows_wechat_toasts_async(config))
 
 
 def enumerate_windows_windows() -> list[WindowInfo]:
@@ -1215,12 +1295,14 @@ def watch_titles(
     verbose: bool = False,
 ) -> None:
     previous_window_keys: set[str] = set()
+    previous_toast_keys: set[str] = set()
     previous_badge: str | None = None
     previous_dock_visual_light_pixels = 0
     previous_visual_red_pixels = 0
     last_unread_reminder_at = 0.0
     last_notification_at = 0.0
     first_scan = True
+    windows_listener_error_reported = False
 
     def emit(message: str, *, bypass_cooldown: bool = False) -> None:
         nonlocal last_notification_at
@@ -1235,6 +1317,15 @@ def watch_titles(
         last_notification_at = current_time
 
     while True:
+        current_toasts: list[WindowsToastInfo] = []
+        try:
+            current_toasts = get_windows_wechat_toasts(config)
+            windows_listener_error_reported = False
+        except Exception as exc:
+            if verbose and not windows_listener_error_reported:
+                print(f"[{APP_NAME}] Windows notification listener unavailable: {exc}", file=sys.stderr)
+            windows_listener_error_reported = True
+
         try:
             current_windows = find_wechat_windows(config)
             current_titles = {window.display_title for window in current_windows}
@@ -1251,6 +1342,9 @@ def watch_titles(
             current_dock_visual_info = None
             current_visual_info = None
 
+        current_toast_sources = {toast.key: toast.source for toast in current_toasts}
+        current_toast_keys = set(current_toast_sources)
+        new_toast_keys = current_toast_keys - previous_toast_keys
         current_window_keys = set(current_window_sources)
         new_window_keys = current_window_keys - previous_window_keys
         current_badge = current_badge_info.badge if current_badge_info else None
@@ -1265,13 +1359,15 @@ def watch_titles(
             badge_text = current_badge if current_badge else "(empty)"
             print(
                 f"[{datetime.now().strftime('%H:%M:%S')}] "
-                f"wechat_windows={len(current_titles)}; dock_badge={badge_text}; "
+                f"wechat_toasts={len(current_toasts)}; wechat_windows={len(current_titles)}; dock_badge={badge_text}; "
                 f"dock_visual_light_pixels={current_dock_visual_light_pixels}; "
                 f"visual_red_pixels={current_visual_red_pixels}",
                 flush=True,
             )
 
         if not first_scan:
+            for key in sorted(new_toast_keys):
+                emit(current_toast_sources[key], bypass_cooldown=True)
             for key in sorted(new_window_keys):
                 emit(current_window_sources[key], bypass_cooldown=True)
             if current_badge and current_badge != previous_badge:
@@ -1312,6 +1408,7 @@ def watch_titles(
                     emit("微信窗口检测到已有未读红点", bypass_cooldown=True)
             last_unread_reminder_at = now
 
+        previous_toast_keys = current_toast_keys
         previous_window_keys = current_window_keys
         previous_badge = current_badge
         previous_dock_visual_light_pixels = current_dock_visual_light_pixels
