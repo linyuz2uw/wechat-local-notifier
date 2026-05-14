@@ -110,6 +110,12 @@ class WindowInfo:
             return f"{self.app_name} - {self.title}" if self.title else self.app_name
         return self.title
 
+    @property
+    def event_key(self) -> str:
+        if platform.system() == "Windows" and self.window_id is not None:
+            return f"{self.window_id}:{self.display_title}"
+        return self.display_title
+
 
 @dataclass(frozen=True)
 class DockBadgeInfo:
@@ -227,7 +233,7 @@ def enumerate_windows_windows() -> list[WindowInfo]:
         user32.GetWindowTextW(hwnd, buffer, length + 1)
         title = normalize_title(buffer.value)
         if title:
-            titles.append(WindowInfo(app_name="", title=title))
+            titles.append(WindowInfo(app_name="", title=title, window_id=int(hwnd)))
         return True
 
     enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(callback)
@@ -318,9 +324,16 @@ def enumerate_windows() -> list[WindowInfo]:
 def find_wechat_titles(config: WatchConfig) -> set[str]:
     return {
         window.display_title
+        for window in find_wechat_windows(config)
+    }
+
+
+def find_wechat_windows(config: WatchConfig) -> list[WindowInfo]:
+    return [
+        window
         for window in enumerate_windows()
         if window_is_wechat(window, config) and title_is_allowed(window.display_title, config)
-    }
+    ]
 
 
 def list_window_titles() -> list[str]:
@@ -1201,7 +1214,7 @@ def watch_titles(
     once: bool = False,
     verbose: bool = False,
 ) -> None:
-    previous_titles: set[str] = set()
+    previous_window_keys: set[str] = set()
     previous_badge: str | None = None
     previous_dock_visual_light_pixels = 0
     previous_visual_red_pixels = 0
@@ -1223,18 +1236,23 @@ def watch_titles(
 
     while True:
         try:
-            current_titles = find_wechat_titles(config)
+            current_windows = find_wechat_windows(config)
+            current_titles = {window.display_title for window in current_windows}
+            current_window_sources = {window.event_key: window.display_title for window in current_windows}
             current_badge_info = get_macos_dock_badge(config)
             current_dock_visual_info = get_macos_dock_visual_badge(config)
             current_visual_info = get_macos_visual_badge(config)
         except Exception as exc:
             print(f"[{APP_NAME}] Watch error: {exc}", file=sys.stderr)
+            current_windows = []
             current_titles = set()
+            current_window_sources = {}
             current_badge_info = None
             current_dock_visual_info = None
             current_visual_info = None
 
-        new_titles = current_titles - previous_titles
+        current_window_keys = set(current_window_sources)
+        new_window_keys = current_window_keys - previous_window_keys
         current_badge = current_badge_info.badge if current_badge_info else None
         current_dock_visual_light_pixels = current_dock_visual_info.light_pixels if current_dock_visual_info else 0
         dock_visual_active = current_dock_visual_light_pixels > 0
@@ -1254,8 +1272,8 @@ def watch_titles(
             )
 
         if not first_scan:
-            for title in sorted(new_titles):
-                emit(title)
+            for key in sorted(new_window_keys):
+                emit(current_window_sources[key], bypass_cooldown=True)
             if current_badge and current_badge != previous_badge:
                 emit(f"{current_badge_info.app_name} 未读角标: {current_badge}")
                 last_unread_reminder_at = now
@@ -1294,7 +1312,7 @@ def watch_titles(
                     emit("微信窗口检测到已有未读红点", bypass_cooldown=True)
             last_unread_reminder_at = now
 
-        previous_titles = current_titles
+        previous_window_keys = current_window_keys
         previous_badge = current_badge
         previous_dock_visual_light_pixels = current_dock_visual_light_pixels
         previous_visual_red_pixels = current_visual_red_pixels
