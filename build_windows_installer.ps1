@@ -28,23 +28,23 @@ function Find-InnoCompiler {
         return $fromPath.Source
     }
 
-    throw "找不到 Inno Setup 编译器 ISCC.exe。请安装 Inno Setup 6，或用 -InnoSetupCompiler 指定 ISCC.exe 路径。"
+    throw "Cannot find Inno Setup compiler ISCC.exe. Install Inno Setup 6 or pass -InnoSetupCompiler."
 }
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
 
-Write-Host "==> 清理旧构建产物"
+Write-Host "==> Cleaning old build outputs"
 Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force installer | Out-Null
 
-Write-Host "==> 检查 Python"
+Write-Host "==> Checking Python"
 python --version
 
-Write-Host "==> 安装/更新 PyInstaller"
+Write-Host "==> Installing/updating PyInstaller"
 python -m pip install --upgrade pip pyinstaller
 
-Write-Host "==> 构建无控制台 exe"
+Write-Host "==> Building windowed exe"
 pyinstaller `
     --clean `
     --onefile `
@@ -53,20 +53,20 @@ pyinstaller `
     wechat_local_notifier.py
 
 if (-not (Test-Path "dist\WeChatLocalNotifier.exe")) {
-    throw "PyInstaller 未生成 dist\WeChatLocalNotifier.exe"
+    throw "PyInstaller did not create dist\WeChatLocalNotifier.exe"
 }
 
 $iscc = Find-InnoCompiler -ExplicitPath $InnoSetupCompiler
-Write-Host "==> 使用 Inno Setup: $iscc"
+Write-Host "==> Using Inno Setup: $iscc"
 
 $env:APP_VERSION = $Version
 & $iscc "installer.iss"
 
 $installerPath = Join-Path $ProjectRoot "installer\WeChatLocalNotifierSetup-$Version.exe"
 if (-not (Test-Path $installerPath)) {
-    throw "安装包未生成：$installerPath"
+    throw "Installer was not created: $installerPath"
 }
 
 Write-Host ""
-Write-Host "完成：$installerPath"
-Write-Host "这个 exe 就是可以发给自己下载/双击安装的 Windows 安装包。"
+Write-Host "Done: $installerPath"
+Write-Host "This exe is the Windows installer you can distribute."
