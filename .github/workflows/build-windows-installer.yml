@@ -41,7 +41,7 @@ jobs:
 
       - name: Build installer
         shell: powershell
-        run: .\build_windows_installer.ps1 -Version "${{ steps.version.outputs.value }}"
+        run: powershell -ExecutionPolicy Bypass -File .\build_windows_installer.ps1 -Version "${{ steps.version.outputs.value }}"
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

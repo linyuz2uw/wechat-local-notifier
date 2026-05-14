@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+installer/*.exe
+*.spec
+config.json
+.DS_Store
+github_upload/
