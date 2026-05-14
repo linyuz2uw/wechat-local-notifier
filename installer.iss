@@ -1,4 +1,4 @@
-#define MyAppName "微信本地弹窗提醒"
+#define MyAppName "WeChat Local Notifier"
 #define MyAppEnglishName "WeChatLocalNotifier"
 #define MyAppVersion GetEnv("APP_VERSION")
 #if MyAppVersion == ""
@@ -24,12 +24,9 @@ PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
-[Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
-
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: unchecked
-Name: "startup"; Description: "开机自动启动"; GroupDescription: "启动选项："; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
+Name: "startup"; Description: "Start automatically when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -38,11 +35,11 @@ Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--config ""{app}\config.json"""
-Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--config ""{app}\config.json"""; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppEnglishName}"; ValueData: """{app}\{#MyAppExeName}"" --config ""{app}\config.json"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--config ""{app}\config.json"" --test-popup"; Description: "安装完成后测试弹窗"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--config ""{app}\config.json"" --test-popup"; Description: "Test popup after installation"; Flags: nowait postinstall skipifsilent
