@@ -42,4 +42,4 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameter
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppEnglishName}"; ValueData: """{app}\{#MyAppExeName}"" --config ""{app}\config.json"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--config ""{app}\config.json"" --test-popup"; Description: "Test popup after installation"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--config ""{app}\config.json"""; Description: "Start WeChat Local Notifier"; Flags: nowait postinstall skipifsilent

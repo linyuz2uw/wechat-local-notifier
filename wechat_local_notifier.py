@@ -1093,12 +1093,14 @@ class PopupNotifier:
         if self.backend in {"native", "both"}:
             show_macos_native_notification(source)
 
-    def run_queue(self, events: "queue.Queue[str | None]") -> None:
+    def run_queue(self, events: "queue.Queue[str | None]", exit_when_idle: bool = False) -> None:
         if self.backend == "native":
             while True:
                 try:
                     source = events.get(timeout=0.25)
                 except queue.Empty:
+                    if exit_when_idle:
+                        return
                     continue
                 self.show_native(source)
             return
@@ -1110,6 +1112,9 @@ class PopupNotifier:
             try:
                 source = events.get_nowait()
             except queue.Empty:
+                if exit_when_idle:
+                    self.root.after(250, self.root.destroy)
+                    return
                 self.root.after(150, drain)
                 return
             self.show_native(source)
@@ -1609,7 +1614,7 @@ def main() -> int:
         )
         watcher.start()
 
-    notifier.run_queue(events)
+    notifier.run_queue(events, exit_when_idle=args.test_popup)
     return 0
 
 

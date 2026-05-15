@@ -94,6 +94,8 @@ copy config.example.json config.json
 python wechat_local_notifier.py --config config.json --test-popup
 ```
 
+`--test-popup` 只显示一次测试弹窗然后退出，不会进入微信监听模式。
+
 开始监听：
 
 ```powershell
@@ -130,6 +132,8 @@ installer\WeChatLocalNotifierSetup-1.0.0.exe
 - 可选桌面快捷方式
 - 可选开机自启动
 - 卸载入口
+
+安装完成页勾选 `Start WeChat Local Notifier` 后，会启动真正的监听程序，不是只显示测试弹窗。
 
 说明：Python 运行时和 Tkinter 会被 PyInstaller 打进 `WeChatLocalNotifier.exe`，所以最终用户只接触安装包。下面的 Python / Inno Setup 只是在你制作安装包时需要。
 
