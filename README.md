@@ -84,6 +84,8 @@ copy config.example.json config.json
 - `play_sound`：是否播放系统提示音，默认 `false`。
 - `enable_startup`：运行时自动写入当前 Windows 用户开机启动，默认 `false`。
 - `enable_windows_notification_listener`：优先使用 Windows 官方通知监听 API，默认 `true`。
+- `debug_log`：写入隐私友好的诊断日志，默认 `false`。
+- `max_pending_popups`：最多排队几个弹窗，默认 3，避免消息爆发后弹很久。
 - `notification_cooldown_seconds`：冷却时间，避免短时间重复弹窗。
 
 ## 运行
@@ -113,6 +115,14 @@ python wechat_local_notifier.py --config config.json --show-sender
 ```powershell
 python wechat_local_notifier.py --config config.json --verbose
 ```
+
+诊断问题时，把 `config.json` 里的 `debug_log` 改成 `true`。Windows 默认日志位置：
+
+```text
+%LOCALAPPDATA%\WeChatLocalNotifier\diagnostic.log
+```
+
+日志只记录监听状态、通知数量、队列长度和错误类型，不记录联系人名、消息正文或账号信息。
 
 ## 最终交付物：Windows 安装包
 
@@ -250,6 +260,12 @@ HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
 - 先运行 `--test-popup`，确认 Tkinter 弹窗能显示。
 - Windows 专注助手、勿扰模式或微信通知设置可能会影响新消息信号。
 - 在安全边界内，如果 Windows 没有向脚本暴露可用信号，程序会保守地不读取微信数据库。
+
+弹窗出现很晚或停留很久：
+
+- 多条消息会被合并成一个弹窗，避免十几条消息排队显示一分钟。
+- 弹窗右上角 `x` 可以关闭，右键弹窗也可以关闭。
+- 打开 `debug_log` 后查看 `queue_size`、`new_toasts`、`new_windows`，可以判断是监听延迟还是队列堆积。
 
 不显示联系人名：
 

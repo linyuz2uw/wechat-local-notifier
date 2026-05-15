@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import ctypes
 import json
+import os
 import platform
 import queue
 import subprocess
@@ -52,6 +53,9 @@ class WatchConfig:
     show_sender: bool = False
     play_sound: bool = False
     enable_startup: bool = False
+    debug_log: bool = False
+    debug_log_path: str = ""
+    max_pending_popups: int = 3
     sender_detection: str = "notification_banner_ocr"
     notification_banner_region_width: int = 560
     notification_banner_region_height: int = 220
@@ -89,6 +93,9 @@ class WatchConfig:
             show_sender=bool(raw.get("show_sender", False)),
             play_sound=bool(raw.get("play_sound", False)),
             enable_startup=bool(raw.get("enable_startup", False)),
+            debug_log=bool(raw.get("debug_log", False)),
+            debug_log_path=str(raw.get("debug_log_path", "")),
+            max_pending_popups=int(raw.get("max_pending_popups", 3)),
             sender_detection=str(raw.get("sender_detection", "notification_banner_ocr")),
             notification_banner_region_width=int(raw.get("notification_banner_region_width", 560)),
             notification_banner_region_height=int(raw.get("notification_banner_region_height", 220)),
@@ -182,6 +189,33 @@ def normalize_badge(badge: str) -> str:
     if normalized in {"", "missing value", "missing"}:
         return ""
     return normalized
+
+
+def default_debug_log_path() -> Path:
+    if platform.system() == "Windows":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+        return base / "WeChatLocalNotifier" / "diagnostic.log"
+    return Path(__file__).with_name("diagnostic.log")
+
+
+def debug_log_path(config: WatchConfig) -> Path:
+    if config.debug_log_path:
+        return Path(config.debug_log_path)
+    return default_debug_log_path()
+
+
+def write_debug_log(config: WatchConfig, event: str, **fields: object) -> None:
+    if not config.debug_log:
+        return
+    try:
+        path = debug_log_path(config)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        safe_fields = " ".join(f"{key}={value}" for key, value in sorted(fields.items()))
+        line = f"{datetime.now().isoformat(timespec='seconds')} event={event} {safe_fields}\n"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except Exception:
+        pass
 
 
 def title_is_wechat(title: str, config: WatchConfig) -> bool:
@@ -1169,6 +1203,9 @@ class PopupNotifier:
         popup.bind("<Leave>", lambda _event: self.set_hovering(False))
         popup.bind("<Button-1>", lambda _event: activate_wechat_window())
         canvas.bind("<Button-1>", lambda _event: activate_wechat_window())
+        canvas.tag_bind("close", "<Button-1>", lambda _event: self.dismiss_popup(popup, on_done))
+        popup.bind("<Button-3>", lambda _event: self.dismiss_popup(popup, on_done))
+        popup.bind("<Escape>", lambda _event: self.dismiss_popup(popup, on_done))
 
         popup.deiconify()
         popup.lift()
@@ -1200,6 +1237,8 @@ class PopupNotifier:
         body_font = ("Microsoft YaHei UI", 10) if platform.system() == "Windows" else ("Arial", 10)
         canvas.create_text(86, 32, text=title, fill="#f7f7f8", font=title_font, anchor="nw", width=width - 110)
         canvas.create_text(86, 58, text=body, fill="#c8ccd2", font=body_font, anchor="nw", width=width - 110)
+        canvas.create_oval(width - 34, 16, width - 14, 36, fill="#3a3d43", outline="", tags=("close",))
+        canvas.create_text(width - 24, 25, text="x", fill="#d4d7dc", font=("Segoe UI", 9, "bold"), tags=("close",))
 
     def rounded_rectangle(self, canvas, x1: int, y1: int, x2: int, y2: int, radius: int, **kwargs) -> None:
         points = [
@@ -1267,6 +1306,11 @@ class PopupNotifier:
         tick()
 
     def fade_out(self, popup, on_done, current: float | None = None) -> None:
+        try:
+            if not popup.winfo_exists():
+                return
+        except Exception:
+            return
         if current is None:
             try:
                 current = float(popup.attributes("-alpha"))
@@ -1283,6 +1327,17 @@ class PopupNotifier:
             on_done()
             return
         popup.after(18, lambda: self.fade_out(popup, on_done, current))
+
+    def dismiss_popup(self, popup, on_done) -> str:
+        try:
+            if popup.winfo_exists():
+                popup.destroy()
+        except Exception:
+            pass
+        if self.is_showing:
+            self.is_showing = False
+            on_done()
+        return "break"
 
 
 def show_macos_native_notification(source: str | None = None) -> None:
@@ -1317,8 +1372,13 @@ def watch_titles(
             and config.notification_cooldown_seconds > 0
             and current_time - last_notification_at < config.notification_cooldown_seconds
         ):
+            write_debug_log(config, "emit_suppressed_cooldown")
+            return
+        if events.qsize() >= max(1, config.max_pending_popups):
+            write_debug_log(config, "emit_suppressed_queue_full", queue_size=events.qsize())
             return
         events.put(format_notification_source(config, message))
+        write_debug_log(config, "emit", queue_size=events.qsize())
         last_notification_at = current_time
 
     while True:
@@ -1329,6 +1389,7 @@ def watch_titles(
         except Exception as exc:
             if verbose and not windows_listener_error_reported:
                 print(f"[{APP_NAME}] Windows notification listener unavailable: {exc}", file=sys.stderr)
+            write_debug_log(config, "windows_listener_error", error_type=type(exc).__name__)
             windows_listener_error_reported = True
 
         try:
@@ -1369,12 +1430,25 @@ def watch_titles(
                 f"visual_red_pixels={current_visual_red_pixels}",
                 flush=True,
             )
+        write_debug_log(
+            config,
+            "poll",
+            toasts=len(current_toasts),
+            new_toasts=len(new_toast_keys),
+            windows=len(current_titles),
+            new_windows=len(new_window_keys),
+            queue_size=events.qsize(),
+        )
 
         if not first_scan:
-            for key in sorted(new_toast_keys):
-                emit(current_toast_sources[key], bypass_cooldown=True)
-            for key in sorted(new_window_keys):
-                emit(current_window_sources[key], bypass_cooldown=True)
+            if new_toast_keys:
+                # Coalesce bursts into one banner. Ten messages should not mean
+                # ten consecutive five-second popups.
+                first_key = sorted(new_toast_keys)[0]
+                emit(current_toast_sources[first_key], bypass_cooldown=True)
+            elif new_window_keys:
+                first_key = sorted(new_window_keys)[0]
+                emit(current_window_sources[first_key], bypass_cooldown=True)
             if current_badge and current_badge != previous_badge:
                 emit(f"{current_badge_info.app_name} 未读角标: {current_badge}")
                 last_unread_reminder_at = now
