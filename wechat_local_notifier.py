@@ -50,6 +50,7 @@ class WatchConfig:
     enable_macos_visual_badge: bool = True
     enable_macos_dock_visual_badge: bool = True
     enable_windows_notification_listener: bool = True
+    enable_windows_visual_badge: bool = True
     show_sender: bool = False
     play_sound: bool = False
     enable_startup: bool = False
@@ -57,6 +58,8 @@ class WatchConfig:
     debug_log_path: str = ""
     max_pending_popups: int = 3
     windows_toast_repeat_seconds: float = 12.0
+    windows_visual_repeat_seconds: float = 12.0
+    windows_visual_red_pixel_threshold: int = 35
     sender_detection: str = "notification_banner_ocr"
     notification_banner_region_width: int = 560
     notification_banner_region_height: int = 220
@@ -91,6 +94,7 @@ class WatchConfig:
             enable_macos_visual_badge=bool(raw.get("enable_macos_visual_badge", True)),
             enable_macos_dock_visual_badge=bool(raw.get("enable_macos_dock_visual_badge", True)),
             enable_windows_notification_listener=bool(raw.get("enable_windows_notification_listener", True)),
+            enable_windows_visual_badge=bool(raw.get("enable_windows_visual_badge", True)),
             show_sender=bool(raw.get("show_sender", False)),
             play_sound=bool(raw.get("play_sound", False)),
             enable_startup=bool(raw.get("enable_startup", False)),
@@ -98,6 +102,8 @@ class WatchConfig:
             debug_log_path=str(raw.get("debug_log_path", "")),
             max_pending_popups=int(raw.get("max_pending_popups", 3)),
             windows_toast_repeat_seconds=float(raw.get("windows_toast_repeat_seconds", 12.0)),
+            windows_visual_repeat_seconds=float(raw.get("windows_visual_repeat_seconds", 12.0)),
+            windows_visual_red_pixel_threshold=int(raw.get("windows_visual_red_pixel_threshold", 35)),
             sender_detection=str(raw.get("sender_detection", "notification_banner_ocr")),
             notification_banner_region_width=int(raw.get("notification_banner_region_width", 560)),
             notification_banner_region_height=int(raw.get("notification_banner_region_height", 220)),
@@ -151,6 +157,15 @@ class DockVisualBadgeInfo:
     @property
     def active(self) -> bool:
         return self.light_pixels > 0
+
+
+@dataclass(frozen=True)
+class WindowsVisualUnreadInfo:
+    red_pixels: int
+
+    @property
+    def active(self) -> bool:
+        return self.red_pixels > 0
 
 
 @dataclass(frozen=True)
@@ -355,6 +370,143 @@ def enumerate_windows_windows() -> list[WindowInfo]:
     enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(callback)
     user32.EnumWindows(enum_proc, 0)
     return titles
+
+
+def foreground_window_is_wechat(config: WatchConfig) -> bool:
+    if platform.system() != "Windows":
+        return False
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return False
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
+        return title_is_wechat(buffer.value, config)
+    except Exception:
+        return False
+
+
+def capture_window_image_windows(hwnd: int):
+    if platform.system() != "Windows":
+        return None
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required for Windows visual unread detection") from exc
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+
+    class RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", ctypes.c_long),
+            ("top", ctypes.c_long),
+            ("right", ctypes.c_long),
+            ("bottom", ctypes.c_long),
+        ]
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ("biSize", ctypes.c_uint32),
+            ("biWidth", ctypes.c_long),
+            ("biHeight", ctypes.c_long),
+            ("biPlanes", ctypes.c_uint16),
+            ("biBitCount", ctypes.c_uint16),
+            ("biCompression", ctypes.c_uint32),
+            ("biSizeImage", ctypes.c_uint32),
+            ("biXPelsPerMeter", ctypes.c_long),
+            ("biYPelsPerMeter", ctypes.c_long),
+            ("biClrUsed", ctypes.c_uint32),
+            ("biClrImportant", ctypes.c_uint32),
+        ]
+
+    class BITMAPINFO(ctypes.Structure):
+        _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", ctypes.c_uint32 * 3)]
+
+    rect = RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return None
+    width = int(rect.right - rect.left)
+    height = int(rect.bottom - rect.top)
+    if width <= 0 or height <= 0:
+        return None
+
+    hwnd_dc = user32.GetWindowDC(hwnd)
+    mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, width, height)
+    old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+    try:
+        # PW_RENDERFULLCONTENT helps capture covered windows on newer Windows.
+        if not user32.PrintWindow(hwnd, mem_dc, 0x00000002):
+            return None
+        bitmap_info = BITMAPINFO()
+        bitmap_info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bitmap_info.bmiHeader.biWidth = width
+        bitmap_info.bmiHeader.biHeight = -height
+        bitmap_info.bmiHeader.biPlanes = 1
+        bitmap_info.bmiHeader.biBitCount = 32
+        bitmap_info.bmiHeader.biCompression = 0
+        buffer = ctypes.create_string_buffer(width * height * 4)
+        result = gdi32.GetDIBits(
+            mem_dc,
+            bitmap,
+            0,
+            height,
+            buffer,
+            ctypes.byref(bitmap_info),
+            0,
+        )
+        if not result:
+            return None
+        return Image.frombuffer("RGBA", (width, height), buffer, "raw", "BGRA", 0, 1)
+    finally:
+        gdi32.SelectObject(mem_dc, old_bitmap)
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(mem_dc)
+        user32.ReleaseDC(hwnd, hwnd_dc)
+
+
+def get_windows_visual_unread(config: WatchConfig) -> WindowsVisualUnreadInfo | None:
+    if platform.system() != "Windows" or not config.enable_windows_visual_badge:
+        return None
+    if has_whitelist(config):
+        return None
+    if foreground_window_is_wechat(config):
+        return WindowsVisualUnreadInfo(red_pixels=0)
+
+    windows = [
+        window
+        for window in find_wechat_windows(config)
+        if window.window_id is not None
+    ]
+    if not windows:
+        return None
+
+    total_red_pixels = 0
+    for window in windows[:2]:
+        try:
+            image = capture_window_image_windows(window.window_id)
+        except Exception:
+            continue
+        if image is None:
+            continue
+        width, height = image.size
+        scan_width = max(1, int(width * 0.55))
+        pixels = image.load()
+        for y in range(height):
+            for x in range(scan_width):
+                red, green, blue, alpha = pixels[x, y]
+                if alpha < 180:
+                    continue
+                if red >= 190 and 20 <= green <= 135 and 20 <= blue <= 135 and red - green >= 65 and red - blue >= 65:
+                    total_red_pixels += 1
+
+    if total_red_pixels < config.windows_visual_red_pixel_threshold:
+        total_red_pixels = 0
+    return WindowsVisualUnreadInfo(red_pixels=total_red_pixels)
 
 
 def enumerate_windows_macos_quartz() -> list[WindowInfo]:
@@ -1361,9 +1513,11 @@ def watch_titles(
     previous_badge: str | None = None
     previous_dock_visual_light_pixels = 0
     previous_visual_red_pixels = 0
+    previous_windows_visual_red_pixels = 0
     last_unread_reminder_at = 0.0
     last_notification_at = 0.0
     last_windows_toast_repeat_at = 0.0
+    last_windows_visual_repeat_at = 0.0
     first_scan = True
     windows_listener_error_reported = False
 
@@ -1399,6 +1553,7 @@ def watch_titles(
             current_windows = find_wechat_windows(config)
             current_titles = {window.display_title for window in current_windows}
             current_window_sources = {window.event_key: window.display_title for window in current_windows}
+            current_windows_visual_info = get_windows_visual_unread(config)
             current_badge_info = get_macos_dock_badge(config)
             current_dock_visual_info = get_macos_dock_visual_badge(config)
             current_visual_info = get_macos_visual_badge(config)
@@ -1407,6 +1562,7 @@ def watch_titles(
             current_windows = []
             current_titles = set()
             current_window_sources = {}
+            current_windows_visual_info = None
             current_badge_info = None
             current_dock_visual_info = None
             current_visual_info = None
@@ -1423,6 +1579,9 @@ def watch_titles(
         current_visual_red_pixels = current_visual_info.red_pixels if current_visual_info else 0
         visual_active = current_visual_red_pixels > 0
         previous_visual_active = previous_visual_red_pixels > 0
+        current_windows_visual_red_pixels = current_windows_visual_info.red_pixels if current_windows_visual_info else 0
+        windows_visual_active = current_windows_visual_red_pixels > 0
+        previous_windows_visual_active = previous_windows_visual_red_pixels > 0
         now = time.monotonic()
         if verbose:
             badge_text = current_badge if current_badge else "(empty)"
@@ -1430,7 +1589,8 @@ def watch_titles(
                 f"[{datetime.now().strftime('%H:%M:%S')}] "
                 f"wechat_toasts={len(current_toasts)}; wechat_windows={len(current_titles)}; dock_badge={badge_text}; "
                 f"dock_visual_light_pixels={current_dock_visual_light_pixels}; "
-                f"visual_red_pixels={current_visual_red_pixels}",
+                f"visual_red_pixels={current_visual_red_pixels}; "
+                f"windows_visual_red_pixels={current_windows_visual_red_pixels}",
                 flush=True,
             )
         write_debug_log(
@@ -1440,6 +1600,7 @@ def watch_titles(
             new_toasts=len(new_toast_keys),
             windows=len(current_titles),
             new_windows=len(new_window_keys),
+            windows_visual_red_pixels=current_windows_visual_red_pixels,
             queue_size=events.qsize(),
         )
 
@@ -1453,6 +1614,16 @@ def watch_titles(
             elif new_window_keys:
                 first_key = sorted(new_window_keys)[0]
                 emit(current_window_sources[first_key], bypass_cooldown=True)
+            elif windows_visual_active and (
+                not previous_windows_visual_active
+                or (
+                    config.windows_visual_repeat_seconds > 0
+                    and now - last_windows_visual_repeat_at >= config.windows_visual_repeat_seconds
+                )
+            ):
+                write_debug_log(config, "windows_visual_unread", red_pixels=current_windows_visual_red_pixels)
+                emit("微信窗口检测到未读标记", bypass_cooldown=True)
+                last_windows_visual_repeat_at = now
             elif (
                 current_toast_keys
                 and config.windows_toast_repeat_seconds > 0
@@ -1509,6 +1680,7 @@ def watch_titles(
         previous_badge = current_badge
         previous_dock_visual_light_pixels = current_dock_visual_light_pixels
         previous_visual_red_pixels = current_visual_red_pixels
+        previous_windows_visual_red_pixels = current_windows_visual_red_pixels
         first_scan = False
         if once:
             return

@@ -84,9 +84,12 @@ copy config.example.json config.json
 - `play_sound`：是否播放系统提示音，默认 `false`。
 - `enable_startup`：运行时自动写入当前 Windows 用户开机启动，默认 `false`。
 - `enable_windows_notification_listener`：优先使用 Windows 官方通知监听 API，默认 `true`。
+- `enable_windows_visual_badge`：当微信窗口打开但被其他软件覆盖时，截取微信窗口画面并只统计红色未读角标像素，默认 `true`。
 - `debug_log`：写入隐私友好的诊断日志，默认 `false`。
 - `max_pending_popups`：最多排队几个弹窗，默认 3，避免消息爆发后弹很久。
 - `windows_toast_repeat_seconds`：当微信只更新同一个 Windows 通知对象时的补弹间隔，默认 12 秒。
+- `windows_visual_repeat_seconds`：当微信窗口被覆盖且持续存在未读红点时的补弹间隔，默认 12 秒。
+- `windows_visual_red_pixel_threshold`：Windows 微信窗口红色未读角标像素阈值，默认 35。
 - `notification_cooldown_seconds`：冷却时间，避免短时间重复弹窗。
 
 ## 运行
@@ -268,6 +271,7 @@ HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
 - 弹窗右上角 `x` 可以关闭，右键弹窗也可以关闭。
 - 打开 `debug_log` 后查看 `queue_size`、`new_toasts`、`new_windows`，可以判断是监听延迟还是队列堆积。
 - 如果日志里持续 `toasts=1` 但 `new_toasts=0`，说明微信在更新同一个通知对象；此时由 `windows_toast_repeat_seconds` 控制补弹频率。
+- 如果微信窗口打开但被其他软件盖住，日志里的 `windows_visual_red_pixels` 和 `event=windows_visual_unread` 用来判断是否检测到了微信窗口里的红色未读角标。这个兜底只统计像素，不做 OCR、不保存截图。
 
 不显示联系人名：
 
