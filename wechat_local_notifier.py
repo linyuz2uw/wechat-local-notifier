@@ -56,6 +56,7 @@ class WatchConfig:
     debug_log: bool = False
     debug_log_path: str = ""
     max_pending_popups: int = 3
+    windows_toast_repeat_seconds: float = 12.0
     sender_detection: str = "notification_banner_ocr"
     notification_banner_region_width: int = 560
     notification_banner_region_height: int = 220
@@ -96,6 +97,7 @@ class WatchConfig:
             debug_log=bool(raw.get("debug_log", False)),
             debug_log_path=str(raw.get("debug_log_path", "")),
             max_pending_popups=int(raw.get("max_pending_popups", 3)),
+            windows_toast_repeat_seconds=float(raw.get("windows_toast_repeat_seconds", 12.0)),
             sender_detection=str(raw.get("sender_detection", "notification_banner_ocr")),
             notification_banner_region_width=int(raw.get("notification_banner_region_width", 560)),
             notification_banner_region_height=int(raw.get("notification_banner_region_height", 220)),
@@ -1361,6 +1363,7 @@ def watch_titles(
     previous_visual_red_pixels = 0
     last_unread_reminder_at = 0.0
     last_notification_at = 0.0
+    last_windows_toast_repeat_at = 0.0
     first_scan = True
     windows_listener_error_reported = False
 
@@ -1446,9 +1449,23 @@ def watch_titles(
                 # ten consecutive five-second popups.
                 first_key = sorted(new_toast_keys)[0]
                 emit(current_toast_sources[first_key], bypass_cooldown=True)
+                last_windows_toast_repeat_at = now
             elif new_window_keys:
                 first_key = sorted(new_window_keys)[0]
                 emit(current_window_sources[first_key], bypass_cooldown=True)
+            elif (
+                current_toast_keys
+                and config.windows_toast_repeat_seconds > 0
+                and now - last_windows_toast_repeat_at >= config.windows_toast_repeat_seconds
+            ):
+                # Some Windows/WeChat builds keep updating one persistent toast
+                # instead of creating a fresh notification per message. In that
+                # case there is no new key to compare, so we provide a bounded
+                # repeat reminder while the WeChat toast remains visible.
+                first_key = sorted(current_toast_keys)[0]
+                write_debug_log(config, "persistent_toast_repeat")
+                emit(current_toast_sources[first_key], bypass_cooldown=True)
+                last_windows_toast_repeat_at = now
             if current_badge and current_badge != previous_badge:
                 emit(f"{current_badge_info.app_name} 未读角标: {current_badge}")
                 last_unread_reminder_at = now

@@ -23,6 +23,7 @@
   "debug_log": false,
   "debug_log_path": "",
   "max_pending_popups": 3,
+  "windows_toast_repeat_seconds": 12,
   "sender_detection": "notification_banner_ocr",
   "notification_banner_region_width": 560,
   "notification_banner_region_height": 220,
